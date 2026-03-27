@@ -1,0 +1,13 @@
+{
+  "empresaId": 1,
+  "impresoras": [
+    {
+      "destino": "COCINA",
+      "ip": "127.0.0.1:9101"
+    },
+    {
+      "destino": "BARRA",
+      "ip": "127.0.0.1:9102"
+    }
+  ]
+}
