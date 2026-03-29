@@ -7,80 +7,36 @@ const path = require('path');
 const chalk = require('chalk');
 const axios = require('axios');
 
-// Usar path.join(process.cwd(), ...) para que el EXE busque archivos en la carpeta donde está guardado
+// Configuración fija
+const BASE_URL = 'https://ida.analiticasoft.com';
 const CONFIG_FILE = path.join(process.cwd(), 'config_ida.json');
 const LOGS_DIR = path.join(process.cwd(), 'logs_impresion');
 
 if (!fs.existsSync(LOGS_DIR)) {
-    try {
-        fs.mkdirSync(LOGS_DIR, { recursive: true });
-    } catch (e) {
-        console.error("No se pudo crear la carpeta de logs:", e.message);
-    }
+    try { fs.mkdirSync(LOGS_DIR, { recursive: true }); } catch (e) {}
 }
 
-// --- ESTADO GLOBAL ---
-const status = {
-    connected: false,
-    authenticated: false,
-    tenant: null,
-    token: null,
-    baseUrl: process.env.IDA_API_URL || 'http://localhost:8080',
-    printers: {}, 
-};
-
+const status = { connected: false, tenant: null, printers: {} };
 const printerQueues = {};
-
-// --- AUTENTICACIÓN Y SINCRONIZACIÓN ---
-async function login(config) {
-    try {
-        console.log(chalk.yellow("🔐 Autenticando con el servidor..."));
-        const resp = await axios.post(`${status.baseUrl}/api/auth/login`, {
-            email: config.email,
-            password: config.password
-        });
-        status.token = resp.data.data.accessToken;
-        status.authenticated = true;
-        console.log(chalk.green("✅ Autenticación exitosa."));
-        return true;
-    } catch (err) {
-        console.error(chalk.red("❌ Error de autenticación:"), err.response?.data?.message || err.message);
-        return false;
-    }
-}
+const processedJobIds = new Set(); // Cache de IDs procesados para evitar duplicidad
 
 async function syncPendingJobs() {
-    if (!status.authenticated) return;
     try {
-        console.log(chalk.cyan("🔄 Sincronizando trabajos pendientes..."));
-        const resp = await axios.get(`${status.baseUrl}/api/restaurante/impresion/pendientes`, {
-            headers: { Authorization: `Bearer ${status.token}` }
-        });
-        
+        console.log(chalk.cyan("🔄 Recuperando pedidos pendientes..."));
+        const resp = await axios.get(`${BASE_URL}/api/public/impresion/${status.tenant}/pendientes`);
         const jobs = resp.data.data || [];
-        console.log(chalk.gray(`📥 Se encontraron ${jobs.length} trabajos pendientes.`));
-        
         for (let job of jobs) {
             addToQueue(job.ip, job.puerto || 9100, job.texto || job.contenidoTexto, job.id);
         }
-    } catch (err) {
-        console.error(chalk.red("❌ Error al sincronizar:"), err.message);
+    } catch (err) { 
+        console.error(chalk.red("⚠️ Error de conexión con el servidor."), err.message); 
     }
 }
 
 async function markAsCompleted(jobId) {
-    if (!jobId || !status.authenticated) return;
-    try {
-        await axios.post(`${status.baseUrl}/api/restaurante/impresion/${jobId}/completar`, {}, {
-            headers: { Authorization: `Bearer ${status.token}` }
-        });
-        // console.log(chalk.gray(`✅ Trabajo #${jobId} marcado como completado en server.`));
-    } catch (err) {
-        console.error(chalk.red(`⚠️ No se pudo marcar el trabajo #${jobId} como completado:`), err.message);
-    }
+    try { await axios.post(`${BASE_URL}/api/public/impresion/${jobId}/completar`); } catch (e) {}
 }
 
-// --- GESTIÓN DE COLAS ---
 async function addToQueue(ip, puerto, texto, jobId = null) {
     const key = `${ip}:${puerto}`;
     if (!printerQueues[key]) {
@@ -88,140 +44,192 @@ async function addToQueue(ip, puerto, texto, jobId = null) {
         status.printers[key] = { queue: 0, totalPrints: 0, lastError: null };
     }
     
-    // Evitar duplicados en cola si ya está el mismo JobId
-    if (jobId && printerQueues[key].queue.some(q => q.jobId === jobId)) return;
+    // --- DE-DUPLICACIÓN (Last Line of Defense) ---
+    if (jobId) {
+        if (processedJobIds.has(jobId)) {
+            // console.log(chalk.gray(`♻️  ID #${jobId} ya procesado, ignorando duplicado.`));
+            return;
+        }
+        
+        // Limitar tamaño del cache de IDs
+        if (processedJobIds.size > 100) {
+            const first = processedJobIds.values().next().value;
+            processedJobIds.delete(first);
+        }
+        processedJobIds.add(jobId);
+    }
 
+    if (jobId && printerQueues[key].queue.some(q => q.jobId === jobId)) return;
     printerQueues[key].queue.push({ texto, jobId });
-    status.printers[key].queue = printerQueues[key].queue.length;
     processQueue(key);
 }
 
 async function processQueue(key) {
     const p = printerQueues[key];
     if (p.active || p.queue.length === 0) return;
-
     p.active = true;
     const item = p.queue.shift();
-    status.printers[key].queue = p.queue.length;
-
     try {
         await executePrint(key, item.texto);
         status.printers[key].totalPrints++;
         status.printers[key].lastError = null;
-        
-        // Avisar al servidor que ya se imprimió
+        p.retryCount = 0; // Reset retry counter on success
         if (item.jobId) await markAsCompleted(item.jobId);
-
     } catch (err) {
         status.printers[key].lastError = err.message;
-        console.error(chalk.red(`\n[!] Error en impresora ${key}: ${err.message}`));
-        // Re-encolar para reintento físico si falló la impresora
-        p.queue.unshift(item);
+        p.retryCount = (p.retryCount || 0) + 1;
+        p.queue.unshift(item); // Put it back at the front
     } finally {
         p.active = false;
-        setTimeout(() => processQueue(key), 500);
+        // Exponential backoff for offline printers: 500ms, 1s, 2s, max 10s.
+        let delay = 500;
+        if (p.retryCount > 0) {
+            delay = Math.min(500 * Math.pow(2, p.retryCount), 10000);
+        }
+        setTimeout(() => processQueue(key), delay);
     }
 }
 
 async function executePrint(key, texto) {
     const logFile = path.join(LOGS_DIR, `${key.replace(/:/g, '-')}.log`);
     fs.appendFileSync(logFile, `\n--- ${new Date().toISOString()} ---\n${texto}\n`);
+    
+    if (key.startsWith('127.0.0.1') || key.startsWith('localhost')) return;
 
-    if (key.startsWith('127.0.0.1') || key.startsWith('localhost')) {
-        return; 
-    }
-
-    let printer = new ThermalPrinter({
-        type: PrinterTypes.EPSON,
-        interface: `tcp://${key}`,
+    let printer = new ThermalPrinter({ 
+        type: PrinterTypes.EPSON, 
+        interface: `tcp://${key}`, 
         options: { timeout: 3000 }
     });
 
-    const lines = texto.split('\n');
+    // --- MEGA RENDERIZADOR v5.5 (ULTRA RESILIENTE) ---
+    
+    // 1. Corregir escapes literales que puedan venir del JSON (el error de \n impreso)
+    let processedText = texto
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"');
+
+    // 2. Normalizar saltos de línea
+    processedText = processedText.replace(/\r\n/g, '\n');
+
+    // 3. Procesar por líneas
+    const lines = processedText.split('\n');
+
     for (let line of lines) {
-        if (line.trim() === '[CUT]') { printer.cut(); continue; }
-        printer.alignLeft(); printer.setTextNormal(); printer.bold(false);
-        let cleanLine = line;
-        if (cleanLine.includes('[C]')) { printer.alignCenter(); cleanLine = cleanLine.replace(/\[C\]/g, '').replace(/\[\/C\]/g, ''); }
-        if (cleanLine.includes('[R]')) { printer.alignRight(); cleanLine = cleanLine.replace(/\[R\]/g, '').replace(/\[\/R\]/g, ''); }
-        if (cleanLine.includes('[B]')) { printer.bold(true); cleanLine = cleanLine.replace(/\[B\]/g, '').replace(/\[\/B\]/g, ''); }
-        if (cleanLine.includes('[L]')) { printer.setTextDoubleHeight(); printer.setTextDoubleWidth(); cleanLine = cleanLine.replace(/\[L\]/g, '').replace(/\[\/L\]/g, ''); }
-        printer.println(cleanLine);
+        let currentLine = line;
+
+        // Comando de CORTE
+        if (currentLine.includes('[CUT]')) {
+            printer.newLine();
+            printer.newLine();
+            printer.newLine();
+            printer.cut();
+            continue;
+        }
+
+        // Reset de estilos
+        printer.alignLeft();
+        printer.setTextNormal();
+        printer.bold(false);
+
+        // Procesar estilos
+        if (currentLine.includes('[C]')) {
+            printer.alignCenter();
+            currentLine = currentLine.replace(/\[C\]/g, '').replace(/\[\/C\]/g, '');
+        }
+        if (currentLine.includes('[R]')) {
+            printer.alignRight();
+            currentLine = currentLine.replace(/\[R\]/g, '').replace(/\[\/R\]/g, '');
+        }
+        if (currentLine.includes('[B]')) {
+            printer.bold(true);
+            currentLine = currentLine.replace(/\[B\]/g, '').replace(/\[\/B\]/g, '');
+        }
+        if (currentLine.includes('[L]')) {
+            printer.setTextDoubleHeight();
+            printer.setTextDoubleWidth();
+            currentLine = currentLine.replace(/\[L\]/g, '').replace(/\[\/L\]/g, '');
+        }
+
+        // Limpieza final de CUALQUIER etiqueta residual [XXX]
+        currentLine = currentLine.replace(/\[\/?[A-Z0-9]+\]/g, '').trimRight();
+
+        // Imprimir si tiene contenido o es un salto de línea intencional
+        if (currentLine.length > 0 || line.length === 0) {
+            printer.println(currentLine);
+        }
     }
-    await printer.execute();
+
+    try {
+        await printer.execute();
+    } catch (e) {
+        throw new Error(e.message);
+    }
 }
 
-// --- MENÚS ---
 async function main() {
     console.clear();
     console.log(chalk.blue.bold("============================================="));
-    console.log(chalk.white.bold("   💠 AGENTE DE IMPRESIÓN IDA v5.0 ULTRA     "));
+    console.log(chalk.white.bold("   💠 AGENTE DE IMPRESIÓN IDA V1.0.1 STABLE  "));
+    console.log(chalk.white.bold("   Motor: Ultra Resilient (Deduplicated)     "));
     console.log(chalk.blue.bold("============================================="));
 
-    const tieneConfig = fs.existsSync(CONFIG_FILE);
-    const choices = [
-        { name: '▶️  Iniciar Servicio', value: 'run', disabled: !tieneConfig },
-        { name: '⚙️  Configuración Nueva (Reset)', value: 'reset' },
-        { name: '➕ Añadir Impresora', value: 'add', disabled: !tieneConfig },
-        { name: '❌ Salir', value: 'exit' }
-    ];
-
-    const { choice } = await inquirer.prompt([{ type: 'list', name: 'choice', message: 'Selecciona:', choices }]);
-
-    if (choice === 'exit') process.exit(0);
-    
-    if (choice === 'reset') {
-        const data = await inquirer.prompt([
-            { name: 'empresaId', message: 'ID de Empresa:' },
-            { name: 'email', message: 'Email del Usuario Driver:' },
-            { name: 'password', message: 'Contraseña:', type: 'password' }
-        ]);
-        const config = { ...data, impresoras: [] };
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-        return main();
+    if (!fs.existsSync(CONFIG_FILE)) {
+        await setupConfig();
     }
 
     const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    const choices = [
+        { name: '▶️  Iniciar Servicio', value: 'run' },
+        { name: '⚙️  Cambiar ID de Empresa o Impresoras', value: 'reset' },
+        { name: '❌ Salir', value: 'exit' }
+    ];
 
-    if (choice === 'add') {
-        const nueva = await inquirer.prompt([
-            { name: 'ip', message: 'IP Impresora:', default: '127.0.0.1' },
-            { name: 'puerto', message: 'Puerto:', default: 9100, type: 'number' }
-        ]);
-        config.impresoras.push(nueva);
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-        return main();
-    }
+    const { choice } = await inquirer.prompt([{ type: 'list', name: 'choice', message: 'Acción:', choices }]);
+    if (choice === 'exit') process.exit(0);
+    if (choice === 'reset') { await setupConfig(); return main(); }
 
     startAgent(config);
 }
 
+async function setupConfig() {
+    const data = await inquirer.prompt([
+        { name: 'empresaId', message: 'ID de Empresa (Tenant):', default: '1' }
+    ]);
+
+    const impresoras = [];
+    let addMore = true;
+    while(addMore) {
+        const imp = await inquirer.prompt([
+            { name: 'ip', message: 'IP local de la impresora:', default: '192.168.1.100' },
+            { name: 'puerto', message: 'Puerto:', default: 9100, type: 'number' },
+            { name: 'tipo', message: 'Nombre:', choices: ['COCINA', 'BARRA', 'CAJA'], type: 'list' },
+            { name: 'more', message: '¿Añadir otra?', type: 'confirm', default: false }
+        ]);
+        impresoras.push({ ip: imp.ip, puerto: imp.puerto, tipo: imp.tipo });
+        addMore = imp.more;
+    }
+    const config = { ...data, impresoras };
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
 async function startAgent(config) {
     status.tenant = config.empresaId;
-    
-    // 1. Intentar Login
-    const ok = await login(config);
-    if (!ok) {
-        console.log(chalk.red("Reintentando login en 10s..."));
-        setTimeout(() => startAgent(config), 10000);
-        return;
-    }
-
-    // 2. Sincronizar lo perdido
+    // La primera sincronización inicial
     await syncPendingJobs();
-
-    // 3. Conectar WebSocket para Real-Time
-    const wsBase = status.baseUrl.replace('http', 'ws');
-    const wsUrl = `${wsBase}/ws/impresion?tenant=${config.empresaId}`;
     
-    console.log(chalk.yellow(`📡 Conectando WebSocket: ${wsUrl}...`));
+    const wsUrl = `wss://ida.analiticasoft.com/ws/impresion?tenant=${config.empresaId}`;
     const ws = new WebSocket(wsUrl);
-
-    ws.on('open', () => {
-        status.connected = true;
-        drawDashboard();
+    
+    ws.on('open', async () => { 
+        status.connected = true; 
+        drawDashboard(); 
+        // Re-sincronizar siempre que se restablezca la conexión
+        await syncPendingJobs();
     });
-
+    
     ws.on('message', (data) => {
         try {
             const p = JSON.parse(data);
@@ -231,29 +239,20 @@ async function startAgent(config) {
             }
         } catch (e) {}
     });
-
-    ws.on('close', () => {
-        status.connected = false;
-        drawDashboard();
-        setTimeout(() => startAgent(config), 5000);
-    });
+    ws.on('close', () => { status.connected = false; drawDashboard(); setTimeout(() => startAgent(config), 5000); });
 }
 
 function drawDashboard() {
     process.stdout.write('\033[H\033[2J');
     console.log(chalk.blue.bold("============================================="));
-    console.log(chalk.white.bold(`   💠 AGENTE IDA v5.0 - TENANT: ${status.tenant}`));
+    console.log(chalk.white.bold(`   💠 AGENTE IDA v5.5 - EMPRESA: ${status.tenant}`));
     console.log(chalk.blue.bold("============================================="));
-    console.log(`Estado Global: ${status.connected ? chalk.green("EN LÍNEA") : chalk.red("DESCONECTADO")}`);
+    console.log(`Estado: ${status.connected ? chalk.green("EN LÍNEA") : chalk.red("DESCONECTADO")}`);
     console.log("---------------------------------------------");
     Object.keys(status.printers).forEach(k => {
         const p = status.printers[k];
         console.log(`${k.padEnd(20)} | Cola: ${p.queue} | OK: ${p.totalPrints} | ${p.lastError ? chalk.red("ERR") : chalk.green("OK")}`);
     });
-    console.log(chalk.blue.bold("============================================="));
 }
 
-main().catch(err => {
-    console.error(err);
-    process.stdin.resume();
-});
+main().catch(err => { console.error(err); process.stdin.resume(); });

@@ -1,13 +1,15 @@
 {
-  "empresaId": 1,
+  "empresaId": "1",
   "impresoras": [
     {
-      "destino": "COCINA",
-      "ip": "127.0.0.1:9101"
+      "ip": "192.168.31.1",
+      "puerto": 9100,
+      "tipo": "COCINA"
     },
     {
-      "destino": "BARRA",
-      "ip": "127.0.0.1:9102"
+      "ip": "127.0.0.1",
+      "puerto": 9100,
+      "tipo": "COCINA"
     }
   ]
 }
