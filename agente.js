@@ -21,6 +21,7 @@ const printerQueues = {};
 const processedJobIds = new Set(); // Cache de IDs procesados para evitar duplicidad
 
 async function syncPendingJobs() {
+    if (!status.tenant) return;
     try {
         console.log(chalk.cyan("🔄 Recuperando pedidos pendientes..."));
         const resp = await axios.get(`${BASE_URL}/api/public/impresion/${status.tenant}/pendientes`);
@@ -34,7 +35,14 @@ async function syncPendingJobs() {
 }
 
 async function markAsCompleted(jobId) {
-    try { await axios.post(`${BASE_URL}/api/public/impresion/${jobId}/completar`); } catch (e) {}
+    if (!jobId) return;
+    try { 
+        await axios.post(`${BASE_URL}/api/public/impresion/${jobId}/completar`); 
+        return true;
+    } catch (e) {
+        console.error(chalk.yellow(`⚠️ No se pudo marcar ID #${jobId} como completado en el servidor.`));
+        return false;
+    }
 }
 
 async function addToQueue(ip, puerto, texto, jobId = null) {
@@ -46,20 +54,21 @@ async function addToQueue(ip, puerto, texto, jobId = null) {
     
     // --- DE-DUPLICACIÓN (Last Line of Defense) ---
     if (jobId) {
-        if (processedJobIds.has(jobId)) {
-            // console.log(chalk.gray(`♻️  ID #${jobId} ya procesado, ignorando duplicado.`));
+        const strId = String(jobId);
+        if (processedJobIds.has(strId)) {
+            // console.log(chalk.gray(`♻️  ID #${strId} ya procesado, ignorando duplicado.`));
             return;
         }
         
-        // Limitar tamaño del cache de IDs
-        if (processedJobIds.size > 100) {
+        // Limitar tamaño del cache de IDs (Aumentado a 1000)
+        if (processedJobIds.size > 1000) {
             const first = processedJobIds.values().next().value;
             processedJobIds.delete(first);
         }
-        processedJobIds.add(jobId);
+        processedJobIds.add(strId);
     }
 
-    if (jobId && printerQueues[key].queue.some(q => q.jobId === jobId)) return;
+    if (jobId && printerQueues[key].queue.some(q => String(q.jobId) === String(jobId))) return;
     printerQueues[key].queue.push({ texto, jobId });
     processQueue(key);
 }
@@ -69,25 +78,38 @@ async function processQueue(key) {
     if (p.active || p.queue.length === 0) return;
     p.active = true;
     const item = p.queue.shift();
+    
+    let printSuccess = false;
     try {
         await executePrint(key, item.texto);
+        printSuccess = true;
         status.printers[key].totalPrints++;
         status.printers[key].lastError = null;
-        p.retryCount = 0; // Reset retry counter on success
-        if (item.jobId) await markAsCompleted(item.jobId);
+        p.retryCount = 0;
     } catch (err) {
+        console.error(chalk.red(`❌ Error físico en impresora ${key}:`), err.message);
         status.printers[key].lastError = err.message;
         p.retryCount = (p.retryCount || 0) + 1;
-        p.queue.unshift(item); // Put it back at the front
-    } finally {
-        p.active = false;
-        // Exponential backoff for offline printers: 500ms, 1s, 2s, max 10s.
-        let delay = 500;
-        if (p.retryCount > 0) {
-            delay = Math.min(500 * Math.pow(2, p.retryCount), 10000);
-        }
-        setTimeout(() => processQueue(key), delay);
+        p.queue.unshift(item); // Reintentar impresión física
     }
+
+    // Notificación al servidor (Independiente de la impresión física)
+    if (printSuccess && item.jobId) {
+        const marked = await markAsCompleted(item.jobId);
+        if (!marked) {
+            // Si falló la notificación pero se imprimió, NO volvemos a imprimir.
+            // Opcional: Podríamos guardarlo en una cola de "notificaciones pendientes"
+            // Por ahora, al estar ya en processedJobIds, no se duplicará en el próximo poll.
+        }
+    }
+
+    p.active = false;
+    // Exponential backoff for offline printers: 500ms, 1s, 2s, max 10s.
+    let delay = printSuccess ? 100 : 500; 
+    if (p.retryCount > 0) {
+        delay = Math.min(500 * Math.pow(2, p.retryCount), 10000);
+    }
+    setTimeout(() => processQueue(key), delay);
 }
 
 async function executePrint(key, texto) {
@@ -217,8 +239,6 @@ async function setupConfig() {
 
 async function startAgent(config) {
     status.tenant = config.empresaId;
-    // La primera sincronización inicial
-    await syncPendingJobs();
     
     const wsUrl = `wss://ida.analiticasoft.com/ws/impresion?tenant=${config.empresaId}`;
     const ws = new WebSocket(wsUrl);
@@ -226,7 +246,7 @@ async function startAgent(config) {
     ws.on('open', async () => { 
         status.connected = true; 
         drawDashboard(); 
-        // Re-sincronizar siempre que se restablezca la conexión
+        // Recuperar pendientes solo al abrir conexión
         await syncPendingJobs();
     });
     
@@ -239,7 +259,11 @@ async function startAgent(config) {
             }
         } catch (e) {}
     });
-    ws.on('close', () => { status.connected = false; drawDashboard(); setTimeout(() => startAgent(config), 5000); });
+    ws.on('close', () => { 
+        status.connected = false; 
+        drawDashboard(); 
+        setTimeout(() => startAgent(config), 5000); 
+    });
 }
 
 function drawDashboard() {
