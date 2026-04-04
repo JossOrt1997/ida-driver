@@ -44,3 +44,16 @@
 {"ts":"2026-04-04T23:19:04.768Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
 {"ts":"2026-04-04T23:19:07.244Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
 {"ts":"2026-04-04T23:19:17.775Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:19:30.787Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:19:43.796Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:19:56.803Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:20:07.251Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:20:09.811Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:20:22.821Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:20:35.837Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:20:48.851Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:21:01.863Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:21:07.253Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:21:14.873Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:21:27.883Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:21:40.889Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}

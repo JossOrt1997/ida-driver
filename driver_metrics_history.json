@@ -282,5 +282,33 @@
     "quarantined_jobs": 0,
     "dedupe_dropped": 3,
     "updated_at": "2026-04-04T23:19:04.768Z"
+  },
+  {
+    "ts": "2026-04-04T23:20:06.181Z",
+    "prints_ok": 4,
+    "prints_error": 25,
+    "acks_ok": 11,
+    "ack_retries": 0,
+    "ws_messages": 4,
+    "ws_reconnects": 0,
+    "pending_synced": 5,
+    "pending_acks": 0,
+    "quarantined_jobs": 0,
+    "dedupe_dropped": 4,
+    "updated_at": "2026-04-04T23:19:56.804Z"
+  },
+  {
+    "ts": "2026-04-04T23:21:06.184Z",
+    "prints_ok": 4,
+    "prints_error": 30,
+    "acks_ok": 11,
+    "ack_retries": 0,
+    "ws_messages": 4,
+    "ws_reconnects": 0,
+    "pending_synced": 6,
+    "pending_acks": 0,
+    "quarantined_jobs": 0,
+    "dedupe_dropped": 5,
+    "updated_at": "2026-04-04T23:21:01.864Z"
   }
 ]
