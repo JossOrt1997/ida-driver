@@ -30,12 +30,15 @@ const LOGS_DIR = path.join(process.cwd(), 'logs_impresion');
 const PENDING_ACKS_FILE = path.join(process.cwd(), 'pending_acks.json');
 const METRICS_FILE = path.join(process.cwd(), 'driver_metrics.json');
 const METRICS_HISTORY_FILE = path.join(process.cwd(), 'driver_metrics_history.json');
+const AUDIT_LOG_FILE = path.join(process.cwd(), 'driver_job_audit.log');
+const QUARANTINED_FILE = path.join(process.cwd(), 'driver_quarantined_jobs.json');
+const REQUIRE_JOB_ID = process.env.IDA_REQUIRE_JOB_ID !== 'false';
 
 if (!fs.existsSync(LOGS_DIR)) {
   try { fs.mkdirSync(LOGS_DIR, { recursive: true }); } catch (e) {}
 }
 
-const status = { connected: false, tenant: null, printers: {}, pendingAcks: 0 };
+const status = { connected: false, tenant: null, printers: {}, pendingAcks: 0, quarantinedJobs: 0 };
 let metricsWriteTimer = null;
 let metricsSnapshotTimer = null;
 let metricsServer = null;
@@ -71,6 +74,34 @@ function scheduleMetricsWrite(metrics) {
       writeJsonSafe(METRICS_FILE, metrics || {});
     } catch (e) {}
   }, METRICS_FLUSH_DEBOUNCE_MS);
+}
+
+function appendAuditLine(entry) {
+  try {
+    fs.appendFileSync(AUDIT_LOG_FILE, `${JSON.stringify(entry)}\n`);
+  } catch (e) {}
+}
+
+function appendQuarantined(entry) {
+  let arr = [];
+  if (fs.existsSync(QUARANTINED_FILE)) {
+    try {
+      const raw = fs.readFileSync(QUARANTINED_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        arr = parsed;
+      }
+    } catch (e) {}
+  }
+
+  arr.push(entry);
+  if (arr.length > 5000) {
+    arr = arr.slice(arr.length - 5000);
+  }
+
+  try {
+    writeJsonSafe(QUARANTINED_FILE, arr);
+  } catch (e) {}
 }
 
 function appendMetricsSnapshot(metrics) {
@@ -165,6 +196,7 @@ function drawDashboard() {
   console.log(chalk.blue.bold('============================================='));
   console.log(`Estado: ${status.connected ? chalk.green('EN LÍNEA') : chalk.red('DESCONECTADO')}`);
   console.log(`Confirmaciones pendientes: ${status.pendingAcks}`);
+  console.log(`En cuarentena (sin ID): ${status.quarantinedJobs}`);
   console.log('---------------------------------------------');
   Object.keys(status.printers).forEach((k) => {
     const p = status.printers[k];
@@ -270,10 +302,17 @@ const runtime = createRuntime({
     status.tenant = nextStatus.tenant;
     status.printers = nextStatus.printers;
     status.pendingAcks = nextStatus.pendingAcks;
+    status.quarantinedJobs = nextStatus.quarantinedJobs;
     drawDashboard();
   },
   onMetrics: (metrics) => {
     scheduleMetricsWrite(metrics);
+  },
+  onAudit: (entry) => {
+    appendAuditLine(entry);
+    if (entry && entry.event === 'job_quarantined') {
+      appendQuarantined(entry);
+    }
   },
   logger: console
 }, {
@@ -282,7 +321,8 @@ const runtime = createRuntime({
   pendingAckIntervalMs: PENDING_ACK_INTERVAL_MS,
   wsHeartbeatIntervalMs: WS_HEARTBEAT_INTERVAL_MS,
   wsReconnectBaseMs: WS_RECONNECT_BASE_MS,
-  wsReconnectMaxMs: WS_RECONNECT_MAX_MS
+  wsReconnectMaxMs: WS_RECONNECT_MAX_MS,
+  requireJobId: REQUIRE_JOB_ID
 });
 
 async function setupConfig() {

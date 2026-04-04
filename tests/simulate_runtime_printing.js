@@ -50,7 +50,7 @@ async function run() {
       printed.push({ key, lines: renderLines(texto) });
     },
     fetchPendingJobs: async () => [
-      { id: 1000, ip: '127.0.0.1', puerto: 9100, texto: '[C][B]Cafe\nNandu[/B][/C]' }
+      { id: ['java.lang.Long', 1000], ip: '127.0.0.1', puerto: 9100, texto: '[C][B]Cafe\nNandu[/B][/C]' }
     ],
     markAsCompleted: async (jobId) => {
       if (failedAcks.has(Number(jobId))) {
@@ -77,6 +77,7 @@ async function run() {
 
   ws.emit('message', JSON.stringify({ id: 1002, ip: '127.0.0.1', puerto: 9100, texto: '[C]Jalapeno\nLimon[/C]' }));
   ws.emit('message', JSON.stringify({ id: 1002, ip: '127.0.0.1', puerto: 9100, texto: '[C]Duplicado 1002[/C]' }));
+  ws.emit('message', JSON.stringify({ ip: '127.0.0.1', puerto: 9100, texto: 'SIN ID DEBE CUARENTENA' }));
 
   await new Promise((r) => setTimeout(r, 250));
 
@@ -100,6 +101,9 @@ async function run() {
   const afterFlush = runtime.getStatus();
   if (afterFlush.pendingAcks !== 0) {
     throw new Error(`Simulacion fallida: pendingAcks esperado 0, actual ${afterFlush.pendingAcks}`);
+  }
+  if (afterFlush.quarantinedJobs < 1) {
+    throw new Error(`Simulacion fallida: se esperaba cuarentena >=1, actual ${afterFlush.quarantinedJobs}`);
   }
 
   if (!completed.includes('1000') || !completed.includes('1002')) {

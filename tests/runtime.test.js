@@ -71,7 +71,7 @@ describe('runtime', () => {
     const last = states[states.length - 1];
     expect(last.pendingAcks).toBe(0);
 
-    runtime.stop();
+    await runtime.stop();
   });
 
   test('enqueues websocket message and updates printer totals', async () => {
@@ -101,7 +101,7 @@ describe('runtime', () => {
     const st = runtime.getStatus();
     expect(st.printers['127.0.0.1:9101'].totalPrints).toBe(1);
 
-    runtime.stop();
+    await runtime.stop();
   });
 
   test('hydrates and persists pending ack entries', async () => {
@@ -137,7 +137,7 @@ describe('runtime', () => {
 
     const st = runtime.getStatus();
     expect(st.pendingAcks).toBeGreaterThanOrEqual(2);
-    const hadSaved = savedSnapshots.some((jobs) => jobs.includes(200) || jobs.includes(300));
+    const hadSaved = savedSnapshots.some((jobs) => jobs.includes('200') || jobs.includes('300'));
     expect(hadSaved).toBe(true);
 
     await runtime.stop();
@@ -216,6 +216,80 @@ describe('runtime', () => {
 
     expect(printed.length).toBe(1);
     expect(printed[0].texto).toBe('uno');
+    await runtime.stop();
+  });
+
+  test('normalizes java long style job id and avoids duplicate print', async () => {
+    const ws = createMockWs();
+    const printed = [];
+    const completed = [];
+    const runtime = createRuntime({
+      executePrint: async (key, texto) => {
+        printed.push({ key, texto });
+      },
+      fetchPendingJobs: async () => [
+        { id: ['java.lang.Long', 700], ip: '127.0.0.1', puerto: 9105, texto: 'Desde pendientes' }
+      ],
+      markAsCompleted: async (jobId) => {
+        completed.push(String(jobId));
+      },
+      createWebSocket: () => ws,
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999,
+      pendingAckPersistDebounceMs: 1,
+      requireJobId: true
+    });
+
+    runtime.start({ empresaId: '6' });
+    ws.emit('open');
+    ws.emit('message', JSON.stringify({ id: 700, ip: '127.0.0.1', puerto: 9105, texto: 'Duplicado via ws' }));
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(printed.length).toBe(1);
+    expect(completed[0]).toBe('700');
+    await runtime.stop();
+  });
+
+  test('quarantines jobs without id when requireJobId is enabled', async () => {
+    const ws = createMockWs();
+    const audits = [];
+    const runtime = createRuntime({
+      executePrint: async () => {},
+      fetchPendingJobs: async () => [
+        { ip: '127.0.0.1', puerto: 9106, texto: 'Sin ID' }
+      ],
+      markAsCompleted: async () => {},
+      createWebSocket: () => ws,
+      onAudit: (entry) => audits.push(entry),
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999,
+      pendingAckPersistDebounceMs: 1,
+      requireJobId: true
+    });
+
+    runtime.start({ empresaId: '7' });
+    ws.emit('open');
+    await new Promise((r) => setTimeout(r, 30));
+
+    const st = runtime.getStatus();
+    expect(st.quarantinedJobs).toBeGreaterThanOrEqual(1);
+    const quarantinedEvents = audits.filter((a) => a.event === 'job_quarantined');
+    expect(quarantinedEvents.length).toBeGreaterThanOrEqual(1);
+
     await runtime.stop();
   });
 });
