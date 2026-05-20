@@ -57,3 +57,64 @@
 {"ts":"2026-04-04T23:21:14.873Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
 {"ts":"2026-04-04T23:21:27.883Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
 {"ts":"2026-04-04T23:21:40.889Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:21:53.901Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:22:06.915Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:22:07.243Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:22:19.926Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:22:32.939Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:22:45.950Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:22:58.959Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:23:07.254Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:23:11.967Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:23:24.981Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:23:37.995Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:23:51.006Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:24:04.021Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:24:07.253Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:24:17.027Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:24:30.036Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:24:43.043Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:24:56.049Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:25:07.242Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:25:09.061Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:25:22.073Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:25:35.086Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:25:48.100Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:26:01.112Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:26:07.244Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:26:14.119Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:26:27.124Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:26:40.129Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:26:53.141Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:27:06.151Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:27:07.244Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:27:19.159Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:27:30.816Z","event":"job_enqueued","key":"192.168.31.27:9100","source":"websocket","jobId":"686","rawJobId":["java.lang.Long",686]}
+{"ts":"2026-04-04T23:27:30.820Z","event":"print_ok","key":"192.168.31.27:9100","jobId":"686"}
+{"ts":"2026-04-04T23:27:31.026Z","event":"ack_ok","jobId":"686"}
+{"ts":"2026-04-04T23:27:32.169Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:27:39.313Z","event":"job_enqueued","key":"192.168.31.27:9100","source":"websocket","jobId":"687","rawJobId":["java.lang.Long",687]}
+{"ts":"2026-04-04T23:27:39.315Z","event":"print_ok","key":"192.168.31.27:9100","jobId":"687"}
+{"ts":"2026-04-04T23:27:39.503Z","event":"ack_ok","jobId":"687"}
+{"ts":"2026-04-04T23:27:45.175Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:27:58.182Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:28:07.249Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:28:11.187Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:28:24.199Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:28:37.209Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:28:50.224Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:28:52.633Z","event":"job_enqueued","key":"192.168.31.27:9100","source":"websocket","jobId":"688","rawJobId":["java.lang.Long",688]}
+{"ts":"2026-04-04T23:28:52.636Z","event":"print_ok","key":"192.168.31.27:9100","jobId":"688"}
+{"ts":"2026-04-04T23:28:52.824Z","event":"ack_ok","jobId":"688"}
+{"ts":"2026-04-04T23:29:03.228Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:29:07.260Z","event":"job_deduped","key":"192.168.31.201:9100","source":"pending-sync","jobId":"18","rawJobId":18,"reason":"duplicate-processed"}
+{"ts":"2026-04-04T23:29:16.234Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:29:29.241Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:29:33.375Z","event":"job_enqueued","key":"192.168.31.27:9100","source":"websocket","jobId":"689","rawJobId":["java.lang.Long",689]}
+{"ts":"2026-04-04T23:29:33.378Z","event":"print_ok","key":"192.168.31.27:9100","jobId":"689"}
+{"ts":"2026-04-04T23:29:33.563Z","event":"ack_ok","jobId":"689"}
+{"ts":"2026-04-04T23:29:39.638Z","event":"job_enqueued","key":"192.168.31.27:9100","source":"websocket","jobId":"690","rawJobId":["java.lang.Long",690]}
+{"ts":"2026-04-04T23:29:39.642Z","event":"print_ok","key":"192.168.31.27:9100","jobId":"690"}
+{"ts":"2026-04-04T23:29:39.828Z","event":"ack_ok","jobId":"690"}
+{"ts":"2026-04-04T23:29:42.248Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}
+{"ts":"2026-04-04T23:29:55.251Z","event":"print_error","key":"192.168.31.201:9100","jobId":"18","error":"Socket timeout"}

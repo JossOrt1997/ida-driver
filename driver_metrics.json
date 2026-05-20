@@ -1,13 +1,13 @@
 {
-  "prints_ok": 4,
-  "prints_error": 32,
-  "acks_ok": 11,
+  "prints_ok": 9,
+  "prints_error": 71,
+  "acks_ok": 16,
   "ack_retries": 0,
-  "ws_messages": 4,
+  "ws_messages": 9,
   "ws_reconnects": 0,
-  "pending_synced": 7,
+  "pending_synced": 15,
   "pending_acks": 0,
   "quarantined_jobs": 0,
-  "dedupe_dropped": 6,
-  "updated_at": "2026-04-04T23:21:37.884Z"
+  "dedupe_dropped": 14,
+  "updated_at": "2026-04-04T23:29:55.252Z"
 }

@@ -5,6 +5,7 @@ const inquirer = require('inquirer');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const chalk = require('chalk');
 const axios = require('axios');
 const { sanitizePrintableText, stripResidualTags } = require('./lib/format');
@@ -12,18 +13,30 @@ const { createRuntime } = require('./lib/runtime');
 
 const BASE_URL = (process.env.IDA_BASE_URL || 'https://ida.analiticasoft.com').replace(/\/+$/, '');
 const WS_ENDPOINT = process.env.IDA_WS_URL || `${BASE_URL.replace(/^http/i, 'ws')}/ws/impresion`;
-const HTTP_TIMEOUT_MS = Number(process.env.IDA_HTTP_TIMEOUT_MS || 5000);
-const PENDING_SYNC_INTERVAL_MS = Number(process.env.IDA_PENDING_SYNC_INTERVAL_MS || 60000);
-const PENDING_ACK_INTERVAL_MS = Number(process.env.IDA_PENDING_ACK_INTERVAL_MS || 15000);
-const WS_HEARTBEAT_INTERVAL_MS = Number(process.env.IDA_WS_HEARTBEAT_INTERVAL_MS || 30000);
-const WS_RECONNECT_BASE_MS = Number(process.env.IDA_WS_RECONNECT_BASE_MS || 5000);
-const WS_RECONNECT_MAX_MS = Number(process.env.IDA_WS_RECONNECT_MAX_MS || 30000);
-const LOG_MAX_BYTES = Number(process.env.IDA_LOG_MAX_BYTES || 5 * 1024 * 1024);
-const METRICS_FLUSH_DEBOUNCE_MS = Number(process.env.IDA_METRICS_FLUSH_DEBOUNCE_MS || 1000);
-const METRICS_PORT = Number(process.env.IDA_METRICS_PORT || 8787);
+const PRINT_DRIVER_TOKEN = process.env.IDA_PRINT_DRIVER_TOKEN || process.env.SECURITY_PRINT_DRIVER_TOKEN || '';
+function parseEnvNumber(name, fallback, { min = null, max = null } = {}) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  if (min !== null && n < min) return fallback;
+  if (max !== null && n > max) return fallback;
+  return Math.trunc(n);
+}
+
+const HTTP_TIMEOUT_MS = parseEnvNumber('IDA_HTTP_TIMEOUT_MS', 5000, { min: 500, max: 120000 });
+const PENDING_SYNC_INTERVAL_MS = parseEnvNumber('IDA_PENDING_SYNC_INTERVAL_MS', 60000, { min: 1000, max: 3600000 });
+const PENDING_ACK_INTERVAL_MS = parseEnvNumber('IDA_PENDING_ACK_INTERVAL_MS', 15000, { min: 1000, max: 3600000 });
+const WS_HEARTBEAT_INTERVAL_MS = parseEnvNumber('IDA_WS_HEARTBEAT_INTERVAL_MS', 30000, { min: 1000, max: 3600000 });
+const WS_RECONNECT_BASE_MS = parseEnvNumber('IDA_WS_RECONNECT_BASE_MS', 5000, { min: 500, max: 120000 });
+const WS_RECONNECT_MAX_MS = parseEnvNumber('IDA_WS_RECONNECT_MAX_MS', 30000, { min: 1000, max: 300000 });
+const LOG_MAX_BYTES = parseEnvNumber('IDA_LOG_MAX_BYTES', 5 * 1024 * 1024, { min: 65536, max: 268435456 });
+const METRICS_FLUSH_DEBOUNCE_MS = parseEnvNumber('IDA_METRICS_FLUSH_DEBOUNCE_MS', 1000, { min: 50, max: 60000 });
+const METRICS_PORT = parseEnvNumber('IDA_METRICS_PORT', 8787, { min: 1, max: 65535 });
 const METRICS_HOST = process.env.IDA_METRICS_HOST || '127.0.0.1';
-const METRICS_SNAPSHOT_INTERVAL_MS = Number(process.env.IDA_METRICS_SNAPSHOT_INTERVAL_MS || 60000);
-const METRICS_HISTORY_MAX_ENTRIES = Number(process.env.IDA_METRICS_HISTORY_MAX_ENTRIES || 1440);
+const METRICS_SNAPSHOT_INTERVAL_MS = parseEnvNumber('IDA_METRICS_SNAPSHOT_INTERVAL_MS', 60000, { min: 1000, max: 86400000 });
+const METRICS_HISTORY_MAX_ENTRIES = parseEnvNumber('IDA_METRICS_HISTORY_MAX_ENTRIES', 1440, { min: 10, max: 200000 });
+const DEEP_HEALTH_TCP_TIMEOUT_MS = parseEnvNumber('IDA_DEEP_HEALTH_TCP_TIMEOUT_MS', 1500, { min: 200, max: 10000 });
 
 const CONFIG_FILE = path.join(process.cwd(), 'config_ida.json');
 const LOGS_DIR = path.join(process.cwd(), 'logs_impresion');
@@ -33,6 +46,7 @@ const METRICS_HISTORY_FILE = path.join(process.cwd(), 'driver_metrics_history.js
 const AUDIT_LOG_FILE = path.join(process.cwd(), 'driver_job_audit.log');
 const QUARANTINED_FILE = path.join(process.cwd(), 'driver_quarantined_jobs.json');
 const REQUIRE_JOB_ID = process.env.IDA_REQUIRE_JOB_ID !== 'false';
+const ENFORCE_PRINTER_ALLOWLIST = process.env.IDA_ENFORCE_PRINTER_ALLOWLIST !== 'false';
 
 if (!fs.existsSync(LOGS_DIR)) {
   try { fs.mkdirSync(LOGS_DIR, { recursive: true }); } catch (e) {}
@@ -42,6 +56,99 @@ const status = { connected: false, tenant: null, printers: {}, pendingAcks: 0, q
 let metricsWriteTimer = null;
 let metricsSnapshotTimer = null;
 let metricsServer = null;
+let activeConfig = null;
+
+function checkPrinterTcp(ip, puerto, timeoutMs) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const socket = new net.Socket();
+    let done = false;
+
+    const finish = (ok, error = null) => {
+      if (done) return;
+      done = true;
+      try { socket.destroy(); } catch (e) {}
+      resolve({
+        ip,
+        puerto,
+        ok,
+        latencyMs: Date.now() - startedAt,
+        error
+      });
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false, 'timeout'));
+    socket.once('error', (err) => finish(false, err && err.message ? err.message : 'connect-error'));
+
+    try {
+      socket.connect(Number(puerto), ip);
+    } catch (err) {
+      finish(false, err && err.message ? err.message : 'invalid-address');
+    }
+  });
+}
+
+async function runDeepHealthCheck() {
+  return runDeepHealthCheckWithRetries(1, true);
+}
+
+async function runDeepHealthCheckWithRetries(retries, parallelChecks = true) {
+  const printers = Array.isArray(activeConfig && activeConfig.impresoras) ? activeConfig.impresoras : [];
+  if (printers.length === 0) {
+    return {
+      ok: true,
+      checked: 0,
+      healthy: 0,
+      unhealthy: 0,
+      avgLatencyMs: 0,
+      timeoutMs: DEEP_HEALTH_TCP_TIMEOUT_MS,
+      printers: []
+    };
+  }
+
+  const safeRetries = Number.isFinite(retries) ? Math.max(1, Math.min(5, Math.trunc(retries))) : 1;
+
+  async function checkWithRetries(ip, puerto) {
+    let last = null;
+    for (let attempt = 1; attempt <= safeRetries; attempt += 1) {
+      const current = await checkPrinterTcp(ip, puerto, DEEP_HEALTH_TCP_TIMEOUT_MS);
+      if (current.ok) {
+        return { ...current, attempts: attempt };
+      }
+      last = current;
+    }
+    return { ...(last || { ip, puerto, ok: false, latencyMs: 0, error: 'unknown' }), attempts: safeRetries };
+  }
+
+  let checks = [];
+  if (parallelChecks) {
+    checks = await Promise.all(
+      printers.map((p) => checkWithRetries(p.ip, p.puerto || 9100))
+    );
+  } else {
+    for (const p of printers) {
+      checks.push(await checkWithRetries(p.ip, p.puerto || 9100));
+    }
+  }
+
+  const healthy = checks.filter((c) => c.ok).length;
+  const unhealthy = checks.length - healthy;
+  const avgLatencyMs = Math.round(checks.reduce((sum, c) => sum + (c.latencyMs || 0), 0) / checks.length);
+
+  return {
+    ok: unhealthy === 0,
+    checked: checks.length,
+    healthy,
+    unhealthy,
+    avgLatencyMs,
+    timeoutMs: DEEP_HEALTH_TCP_TIMEOUT_MS,
+    retries: safeRetries,
+    parallel: parallelChecks,
+    printers: checks
+  };
+}
 
 function writeJsonSafe(filePath, data) {
   const tmpPath = `${filePath}.tmp`;
@@ -135,7 +242,8 @@ function startObservabilityServer() {
   if (metricsServer) return;
 
   metricsServer = http.createServer((req, res) => {
-    const url = req.url || '/';
+    const parsedUrl = new URL(req.url || '/', `http://${METRICS_HOST}:${METRICS_PORT}`);
+    const url = parsedUrl.pathname || '/';
     const now = new Date().toISOString();
 
     if (url === '/health') {
@@ -157,12 +265,36 @@ function startObservabilityServer() {
       return;
     }
 
+    if (url === '/health/deep') {
+      const retriesParam = parsedUrl.searchParams.get('retries');
+      const retries = retriesParam ? Number(retriesParam) : 1;
+      const parallelParam = parsedUrl.searchParams.get('parallel');
+      const parallelChecks = parallelParam !== 'false';
+      runDeepHealthCheckWithRetries(retries, parallelChecks)
+        .then((deep) => {
+          const payload = {
+            ok: deep.ok,
+            ts: now,
+            deep,
+            status: runtime.getStatus(),
+            metrics: runtime.getMetrics()
+          };
+          res.writeHead(deep.ok ? 200 : 503, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(payload));
+        })
+        .catch((err) => {
+          res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: err && err.message ? err.message : 'deep-health-error' }));
+        });
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: false, error: 'not-found' }));
   });
 
   metricsServer.listen(METRICS_PORT, METRICS_HOST, () => {
-    console.log(chalk.gray(`Observabilidad en http://${METRICS_HOST}:${METRICS_PORT} (/health, /metrics)`));
+    console.log(chalk.gray(`Observabilidad en http://${METRICS_HOST}:${METRICS_PORT} (/health, /health/deep, /metrics)`));
   });
 
   metricsSnapshotTimer = setInterval(() => {
@@ -258,6 +390,23 @@ async function executePrint(key, texto) {
       printer.bold(true);
       currentLine = currentLine.replace(/\[B\]/g, '').replace(/\[\/B\]/g, '');
     }
+
+    const imageMatch = currentLine.match(/\[IMG:(.+?)\]/i);
+    if (imageMatch) {
+      const imageUrl = (imageMatch[1] || '').trim();
+      if (imageUrl) {
+        const imageLocalPath = await resolveImageToLocalPath(imageUrl);
+        if (imageLocalPath) {
+          try {
+            await printer.printImage(imageLocalPath);
+          } catch (imgErr) {
+            fs.appendFileSync(logFile, `\n[WARN] No se pudo imprimir imagen ${imageUrl}: ${imgErr.message}\n`);
+          }
+        }
+      }
+      currentLine = currentLine.replace(/\[IMG:.+?\]/ig, '').trim();
+    }
+
     if (currentLine.includes('[L]')) {
       printer.setTextDoubleHeight();
       printer.setTextDoubleWidth();
@@ -277,15 +426,50 @@ async function executePrint(key, texto) {
   }
 }
 
+async function resolveImageToLocalPath(imageUrl) {
+  try {
+    let finalUrl = imageUrl;
+    if (!/^https?:\/\//i.test(finalUrl)) {
+      if (finalUrl.startsWith('/')) {
+        finalUrl = `${BASE_URL}${finalUrl}`;
+      } else {
+        finalUrl = `${BASE_URL}/${finalUrl}`;
+      }
+    }
+
+    const parsed = new URL(finalUrl);
+    const extRaw = path.extname(parsed.pathname || '').toLowerCase();
+    const ext = ['.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'].includes(extRaw) ? extRaw : '.png';
+    const tmpFile = path.join(LOGS_DIR, `logo-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`);
+
+    const response = await axios.get(finalUrl, {
+      responseType: 'arraybuffer',
+      timeout: HTTP_TIMEOUT_MS
+    });
+
+    fs.writeFileSync(tmpFile, Buffer.from(response.data));
+    return tmpFile;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function fetchPendingJobs(tenant) {
   const resp = await axios.get(`${BASE_URL}/api/public/impresion/${tenant}/pendientes`, {
+    headers: PRINT_DRIVER_TOKEN ? { 'X-Print-Token': PRINT_DRIVER_TOKEN } : undefined,
     timeout: HTTP_TIMEOUT_MS
   });
   return (resp.data && resp.data.data) || [];
 }
 
 async function markAsCompleted(jobId) {
-  await axios.post(`${BASE_URL}/api/public/impresion/${jobId}/completar`, {}, {
+  const tenantId = (activeConfig && activeConfig.empresaId) ? String(activeConfig.empresaId) : '';
+  const completeUrl = tenantId
+    ? `${BASE_URL}/api/public/impresion/${jobId}/completar?tenantId=${encodeURIComponent(tenantId)}`
+    : `${BASE_URL}/api/public/impresion/${jobId}/completar`;
+
+  await axios.post(completeUrl, {}, {
+    headers: PRINT_DRIVER_TOKEN ? { 'X-Print-Token': PRINT_DRIVER_TOKEN } : undefined,
     timeout: HTTP_TIMEOUT_MS
   });
 }
@@ -322,7 +506,8 @@ const runtime = createRuntime({
   wsHeartbeatIntervalMs: WS_HEARTBEAT_INTERVAL_MS,
   wsReconnectBaseMs: WS_RECONNECT_BASE_MS,
   wsReconnectMaxMs: WS_RECONNECT_MAX_MS,
-  requireJobId: REQUIRE_JOB_ID
+  requireJobId: REQUIRE_JOB_ID,
+  enforcePrinterAllowlist: ENFORCE_PRINTER_ALLOWLIST
 });
 
 async function setupConfig() {
@@ -359,6 +544,7 @@ async function main() {
   }
 
   const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  activeConfig = config;
   const choices = [
     { name: '▶️  Iniciar Servicio', value: 'run' },
     { name: '⚙️  Cambiar ID de Empresa o Impresoras', value: 'reset' },
@@ -376,11 +562,29 @@ async function main() {
   startObservabilityServer();
 }
 
-process.on('SIGINT', () => {
-  Promise.resolve()
+async function shutdownAndExit() {
+  await Promise.resolve()
     .then(() => stopObservabilityServer())
-    .then(() => runtime.stop())
-    .finally(() => process.exit(0));
+    .then(() => runtime.stop());
+  process.exit(0);
+}
+
+process.on('SIGINT', () => {
+  shutdownAndExit().catch(() => process.exit(1));
+});
+
+process.on('SIGTERM', () => {
+  shutdownAndExit().catch(() => process.exit(1));
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException:', err && err.message ? err.message : err);
+  shutdownAndExit().catch(() => process.exit(1));
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection:', reason && reason.message ? reason.message : reason);
+  shutdownAndExit().catch(() => process.exit(1));
 });
 
 main().catch((err) => {

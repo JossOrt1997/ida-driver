@@ -292,4 +292,48 @@ describe('runtime', () => {
 
     await runtime.stop();
   });
+
+  test('quarantines jobs targeting printers outside allowlist', async () => {
+    const ws = createMockWs();
+    const audits = [];
+    const printed = [];
+    const runtime = createRuntime({
+      executePrint: async (key, texto) => {
+        printed.push({ key, texto });
+      },
+      fetchPendingJobs: async () => [
+        { id: 810, ip: '127.0.0.1', puerto: 9999, texto: 'Fuera de allowlist' }
+      ],
+      markAsCompleted: async () => {},
+      createWebSocket: () => ws,
+      onAudit: (entry) => audits.push(entry),
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999,
+      pendingAckPersistDebounceMs: 1,
+      requireJobId: true,
+      enforcePrinterAllowlist: true
+    });
+
+    runtime.start({
+      empresaId: '8',
+      impresoras: [{ ip: '127.0.0.1', puerto: 9100, tipo: 'COCINA' }]
+    });
+    ws.emit('open');
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(printed.length).toBe(0);
+    const st = runtime.getStatus();
+    expect(st.quarantinedJobs).toBeGreaterThanOrEqual(1);
+    const quarantined = audits.find((a) => a.event === 'job_quarantined' && a.reason === 'printer-not-allowed');
+    expect(Boolean(quarantined)).toBe(true);
+
+    await runtime.stop();
+  });
 });
