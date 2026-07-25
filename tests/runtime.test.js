@@ -1,4 +1,5 @@
 const { createRuntime } = require('../lib/runtime');
+const crypto = require('crypto');
 
 function createMockWs() {
   const handlers = new Map();
@@ -25,6 +26,70 @@ function createMockWs() {
 }
 
 describe('runtime', () => {
+  test('connects websocket with tenant-scoped print token', async () => {
+    const ws = createMockWs();
+    let connectedUrl = '';
+    const runtime = createRuntime({
+      executePrint: async () => {},
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => {},
+      createWebSocket: (url) => {
+        connectedUrl = url;
+        return ws;
+      },
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      printDriverToken: 'root-secret',
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999
+    });
+
+    runtime.start({ empresaId: '9' });
+
+    const expectedToken = crypto
+      .createHmac('sha256', 'root-secret')
+      .update('print-driver:9')
+      .digest('base64url');
+    expect(connectedUrl).toBe(`ws://test.local/ws/impresion?tenant=9&token=${encodeURIComponent(expectedToken)}`);
+
+    await runtime.stop();
+  });
+
+  test('connects websocket without token query when root print token is not configured', async () => {
+    const ws = createMockWs();
+    let connectedUrl = '';
+    const runtime = createRuntime({
+      executePrint: async () => {},
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => {},
+      createWebSocket: (url) => {
+        connectedUrl = url;
+        return ws;
+      },
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      printDriverToken: '',
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999
+    });
+
+    runtime.start({ empresaId: '11' });
+
+    expect(connectedUrl).toBe('ws://test.local/ws/impresion?tenant=11');
+
+    await runtime.stop();
+  });
+
   test('adds failed completion to pending ack queue and flushes later', async () => {
     const ws = createMockWs();
     const calls = { complete: 0 };

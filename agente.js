@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const net = require('net');
+const crypto = require('crypto');
 const chalk = require('chalk');
 const axios = require('axios');
 const { sanitizePrintableText, stripResidualTags } = require('./lib/format');
@@ -14,6 +15,20 @@ const { createRuntime } = require('./lib/runtime');
 const BASE_URL = (process.env.IDA_BASE_URL || 'https://ida.analiticasoft.com').replace(/\/+$/, '');
 const WS_ENDPOINT = process.env.IDA_WS_URL || `${BASE_URL.replace(/^http/i, 'ws')}/ws/impresion`;
 const PRINT_DRIVER_TOKEN = process.env.IDA_PRINT_DRIVER_TOKEN || process.env.SECURITY_PRINT_DRIVER_TOKEN || '';
+
+function getTenantPrintToken(tenant) {
+  if (!PRINT_DRIVER_TOKEN || !tenant) return '';
+  return crypto
+    .createHmac('sha256', PRINT_DRIVER_TOKEN)
+    .update(`print-driver:${tenant}`)
+    .digest('base64url');
+}
+
+function printAuthHeaders(tenant) {
+  const tenantToken = getTenantPrintToken(tenant);
+  return tenantToken ? { 'X-Print-Token': tenantToken } : undefined;
+}
+
 function parseEnvNumber(name, fallback, { min = null, max = null } = {}) {
   const raw = process.env[name];
   if (raw === undefined || raw === null || raw === '') return fallback;
@@ -456,7 +471,7 @@ async function resolveImageToLocalPath(imageUrl) {
 
 async function fetchPendingJobs(tenant) {
   const resp = await axios.get(`${BASE_URL}/api/public/impresion/${tenant}/pendientes`, {
-    headers: PRINT_DRIVER_TOKEN ? { 'X-Print-Token': PRINT_DRIVER_TOKEN } : undefined,
+    headers: printAuthHeaders(tenant),
     timeout: HTTP_TIMEOUT_MS
   });
   return (resp.data && resp.data.data) || [];
@@ -469,7 +484,7 @@ async function markAsCompleted(jobId) {
     : `${BASE_URL}/api/public/impresion/${jobId}/completar`;
 
   await axios.post(completeUrl, {}, {
-    headers: PRINT_DRIVER_TOKEN ? { 'X-Print-Token': PRINT_DRIVER_TOKEN } : undefined,
+    headers: printAuthHeaders(tenantId),
     timeout: HTTP_TIMEOUT_MS
   });
 }
@@ -501,6 +516,7 @@ const runtime = createRuntime({
   logger: console
 }, {
   wsEndpoint: WS_ENDPOINT,
+  printDriverToken: PRINT_DRIVER_TOKEN,
   pendingSyncIntervalMs: PENDING_SYNC_INTERVAL_MS,
   pendingAckIntervalMs: PENDING_ACK_INTERVAL_MS,
   wsHeartbeatIntervalMs: WS_HEARTBEAT_INTERVAL_MS,
