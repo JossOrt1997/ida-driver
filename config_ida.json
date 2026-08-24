@@ -1,8 +1,13 @@
 {
-  "empresaId": "3",
+  "empresaId": "7",
   "impresoras": [
     {
-      "ip": "192.168.31.27",
+      "ip": "192.168.0.201",
+      "puerto": 9100,
+      "tipo": "BARRA"
+    },
+    {
+      "ip": "192.168.0.202",
       "puerto": 9100,
       "tipo": "COCINA"
     }

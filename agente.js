@@ -5,12 +5,17 @@ const inquirer = require('inquirer');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
 const chalk = require('chalk');
 const axios = require('axios');
 const { sanitizePrintableText, stripResidualTags } = require('./lib/format');
 const { createRuntime } = require('./lib/runtime');
+
+const CERTS_DIR = path.join(process.cwd(), 'certs');
+const CERT_KEY = process.env.IDA_TLS_KEY || path.join(CERTS_DIR, 'ida_peripheral.key');
+const CERT_CRT = process.env.IDA_TLS_CERT || path.join(CERTS_DIR, 'ida_fullchain.crt');
 
 const BASE_URL = (process.env.IDA_BASE_URL || 'https://ida.analiticasoft.com').replace(/\/+$/, '');
 const WS_ENDPOINT = process.env.IDA_WS_URL || `${BASE_URL.replace(/^http/i, 'ws')}/ws/impresion`;
@@ -256,8 +261,20 @@ function startObservabilityServer() {
   if (!Number.isFinite(METRICS_PORT) || METRICS_PORT <= 0) return;
   if (metricsServer) return;
 
-  metricsServer = http.createServer((req, res) => {
-    const parsedUrl = new URL(req.url || '/', `http://${METRICS_HOST}:${METRICS_PORT}`);
+  const requestHandler = (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Print-Token');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    const isSecure = Boolean(req.socket && req.socket.encrypted);
+    const proto = isSecure ? 'https' : 'http';
+    const parsedUrl = new URL(req.url || '/', `${proto}://${METRICS_HOST}:${METRICS_PORT}`);
     const url = parsedUrl.pathname || '/';
     const now = new Date().toISOString();
 
@@ -265,6 +282,7 @@ function startObservabilityServer() {
       const payload = {
         ok: true,
         ts: now,
+        tls: isSecure,
         status: runtime.getStatus(),
         metrics: runtime.getMetrics()
       };
@@ -290,6 +308,7 @@ function startObservabilityServer() {
           const payload = {
             ok: deep.ok,
             ts: now,
+            tls: isSecure,
             deep,
             status: runtime.getStatus(),
             metrics: runtime.getMetrics()
@@ -306,11 +325,32 @@ function startObservabilityServer() {
 
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: false, error: 'not-found' }));
-  });
+  };
 
-  metricsServer.listen(METRICS_PORT, METRICS_HOST, () => {
-    console.log(chalk.gray(`Observabilidad en http://${METRICS_HOST}:${METRICS_PORT} (/health, /health/deep, /metrics)`));
-  });
+  const hasTls = fs.existsSync(CERT_KEY) && fs.existsSync(CERT_CRT);
+  if (hasTls) {
+    try {
+      const tlsOptions = {
+        key: fs.readFileSync(CERT_KEY),
+        cert: fs.readFileSync(CERT_CRT)
+      };
+      metricsServer = https.createServer(tlsOptions, requestHandler);
+      metricsServer.listen(METRICS_PORT, METRICS_HOST, () => {
+        console.log(chalk.green(`🔒 Driver Seguro (HTTPS) en https://${METRICS_HOST}:${METRICS_PORT} (/health, /metrics)`));
+      });
+    } catch (tlsErr) {
+      console.log(chalk.yellow(`⚠️ Error cargando certificados TLS (${tlsErr.message}). Iniciando HTTP estándar...`));
+      metricsServer = http.createServer(requestHandler);
+      metricsServer.listen(METRICS_PORT, METRICS_HOST, () => {
+        console.log(chalk.gray(`Observabilidad en http://${METRICS_HOST}:${METRICS_PORT}`));
+      });
+    }
+  } else {
+    metricsServer = http.createServer(requestHandler);
+    metricsServer.listen(METRICS_PORT, METRICS_HOST, () => {
+      console.log(chalk.gray(`Observabilidad en http://${METRICS_HOST}:${METRICS_PORT} (/health, /health/deep, /metrics)`));
+    });
+  }
 
   metricsSnapshotTimer = setInterval(() => {
     appendMetricsSnapshot(runtime.getMetrics());
