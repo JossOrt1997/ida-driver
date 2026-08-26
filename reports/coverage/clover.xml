@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<coverage generated="1787333091111" clover="3.2.0">
-  <project timestamp="1787333091111" name="All files">
+<coverage generated="1787728515744" clover="3.2.0">
+  <project timestamp="1787728515745" name="All files">
     <metrics statements="346" coveredstatements="252" conditionals="331" coveredconditionals="180" methods="56" coveredmethods="40" elements="733" coveredelements="472" complexity="0" loc="346" ncloc="346" packages="1" files="3" classes="3"/>
     <file name="format.js" path="/home/joss/IDA/driver/lib/format.js">
       <metrics statements="4" coveredstatements="4" conditionals="4" coveredconditionals="2" methods="2" coveredmethods="2"/>
