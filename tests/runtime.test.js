@@ -60,6 +60,79 @@ describe('runtime', () => {
     await runtime.stop();
   });
 
+  test('connects and synchronizes with driver access id without tenant number', async () => {
+    const ws = createMockWs();
+    const accessId = 'A'.repeat(64);
+    let connectedUrl = '';
+    let pendingCalls = 0;
+    const runtime = createRuntime({
+      executePrint: async () => {},
+      fetchPendingJobs: async () => {
+        pendingCalls += 1;
+        return [];
+      },
+      markAsCompleted: async () => {},
+      createWebSocket: (url) => {
+        connectedUrl = url;
+        return ws;
+      },
+      getDriverAccessId: () => accessId,
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999
+    });
+
+    runtime.start({ impresoras: [] });
+    ws.emit('open');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(connectedUrl).toBe(`ws://test.local/ws/impresion?driverAccessId=${accessId}`);
+    expect(pendingCalls).toBeGreaterThanOrEqual(1);
+
+    await runtime.stop();
+  });
+
+  test('uses the dynamic token provider for websocket authentication', async () => {
+    const ws = createMockWs();
+    let connectedUrl = '';
+    const runtime = createRuntime({
+      executePrint: async () => {},
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => {},
+      createWebSocket: (url) => {
+        connectedUrl = url;
+        return ws;
+      },
+      getPrintDriverToken: () => 'config-secret',
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      printDriverToken: '',
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999
+    });
+
+    runtime.start({ empresaId: '12' });
+
+    const expectedToken = crypto
+      .createHmac('sha256', 'config-secret')
+      .update('print-driver:12')
+      .digest('base64url');
+    expect(connectedUrl).toBe(`ws://test.local/ws/impresion?tenant=12&token=${encodeURIComponent(expectedToken)}`);
+
+    await runtime.stop();
+  });
+
   test('connects websocket without token query when root print token is not configured', async () => {
     const ws = createMockWs();
     let connectedUrl = '';
@@ -136,6 +209,36 @@ describe('runtime', () => {
     const last = states[states.length - 1];
     expect(last.pendingAcks).toBe(0);
 
+    await runtime.stop();
+  });
+
+  test('quarantines a print after the configured retry limit and reports the error', async () => {
+    const failed = [];
+    const runtime = createRuntime({
+      executePrint: async () => {
+        throw new Error('printer offline');
+      },
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => {},
+      markAsFailed: async (jobId, message) => failed.push({ jobId, message }),
+      createWebSocket: () => createMockWs(),
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      maxPrintRetries: 2,
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999,
+      wsReconnectBaseMs: 999999,
+      wsReconnectMaxMs: 999999
+    });
+
+    runtime.start({ empresaId: '6' });
+    runtime.addToQueue('127.0.0.1', 9106, 'Ticket', 601);
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+
+    expect(runtime.getStatus().quarantinedJobs).toBe(1);
+    expect(failed).toEqual([{ jobId: '601', message: 'printer offline' }]);
     await runtime.stop();
   });
 

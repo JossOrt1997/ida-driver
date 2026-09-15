@@ -21,16 +21,34 @@ const BASE_URL = (process.env.IDA_BASE_URL || 'https://ida.analiticasoft.com').r
 const WS_ENDPOINT = process.env.IDA_WS_URL || `${BASE_URL.replace(/^http/i, 'ws')}/ws/impresion`;
 const PRINT_DRIVER_TOKEN = process.env.IDA_PRINT_DRIVER_TOKEN || process.env.SECURITY_PRINT_DRIVER_TOKEN || '';
 
-function getTenantPrintToken(tenant) {
-  if (!PRINT_DRIVER_TOKEN || !tenant) return '';
+function getConfiguredPrintDriverToken() {
+  return (activeConfig && (activeConfig.printDriverToken || activeConfig.securityPrintDriverToken))
+    || PRINT_DRIVER_TOKEN;
+}
+
+function getConfiguredDriverAccessId() {
+  return activeConfig && activeConfig.driverAccessId ? String(activeConfig.driverAccessId) : '';
+}
+
+function getConfiguredBaseUrl() {
+  return ((activeConfig && activeConfig.baseUrl) || BASE_URL).replace(/\/+$/, '');
+}
+
+function getConfiguredWsEndpoint() {
+  const configured = activeConfig && activeConfig.wsEndpoint;
+  return configured || `${getConfiguredBaseUrl().replace(/^http/i, 'ws')}/ws/impresion`;
+}
+
+function getTenantPrintToken(tenant, rootSecret = getConfiguredPrintDriverToken()) {
+  if (!rootSecret || !tenant) return '';
   return crypto
-    .createHmac('sha256', PRINT_DRIVER_TOKEN)
+    .createHmac('sha256', rootSecret)
     .update(`print-driver:${tenant}`)
     .digest('base64url');
 }
 
 function printAuthHeaders(tenant) {
-  const tenantToken = getTenantPrintToken(tenant);
+  const tenantToken = getTenantPrintToken(tenant, getConfiguredPrintDriverToken());
   return tenantToken ? { 'X-Print-Token': tenantToken } : undefined;
 }
 
@@ -378,17 +396,45 @@ function stopObservabilityServer() {
 
 function drawDashboard() {
   process.stdout.write('\033[H\033[2J');
-  console.log(chalk.blue.bold('============================================='));
-  console.log(chalk.white.bold(`   💠 AGENTE IDA v6.0 - EMPRESA: ${status.tenant}`));
-  console.log(chalk.blue.bold('============================================='));
-  console.log(`Estado: ${status.connected ? chalk.green('EN LÍNEA') : chalk.red('DESCONECTADO')}`);
-  console.log(`Confirmaciones pendientes: ${status.pendingAcks}`);
-  console.log(`En cuarentena (sin ID): ${status.quarantinedJobs}`);
-  console.log('---------------------------------------------');
-  Object.keys(status.printers).forEach((k) => {
-    const p = status.printers[k];
-    console.log(`${k.padEnd(20)} | Cola: ${p.queue} | OK: ${p.totalPrints} | ${p.lastError ? chalk.red('ERR') : chalk.green('OK')}`);
-  });
+  const connection = status.connected ? chalk.bgGreen.black(' EN LINEA ') : chalk.bgRed.white(' DESCONECTADO ');
+  const lastEvent = status.lastConnectedAt || status.lastDisconnectedAt;
+  const sync = status.lastSyncAt ? `ultima sincronizacion ${formatDashboardTime(status.lastSyncAt)}` : 'sin sincronizacion';
+
+  console.log(chalk.cyan.bold('┌─────────────────────────────────────────────────────────────┐'));
+  console.log(chalk.cyan.bold('│ ') + chalk.white.bold(`IDA PRINT CENTER  |  ${status.connected ? 'Empresa conectada' : 'Preparando conexión'}`.padEnd(59)) + chalk.cyan.bold('│'));
+  console.log(chalk.cyan.bold('├─────────────────────────────────────────────────────────────┤'));
+  console.log(chalk.cyan.bold('│ ') + `Conexion: ${connection}  ${sync}`.padEnd(59) + chalk.cyan.bold('│'));
+  console.log(chalk.cyan.bold('│ ') + `Cola de confirmaciones: ${status.pendingAcks}  |  Cuarentena: ${status.quarantinedJobs}`.padEnd(59) + chalk.cyan.bold('│'));
+  if (status.lastError) {
+    console.log(chalk.cyan.bold('│ ') + chalk.yellow(`Aviso: ${status.lastError}`.slice(0, 57).padEnd(59)) + chalk.cyan.bold('│'));
+  } else if (lastEvent) {
+    console.log(chalk.cyan.bold('│ ') + `Ultimo evento: ${formatDashboardTime(lastEvent)}`.padEnd(59) + chalk.cyan.bold('│'));
+  }
+  console.log(chalk.cyan.bold('├─────────────────────────────────────────────────────────────┤'));
+  console.log(chalk.cyan.bold('│ ') + chalk.white.bold('IMPRESORAS'.padEnd(59)) + chalk.cyan.bold('│'));
+
+  const printers = Object.entries(status.printers || {});
+  if (printers.length === 0) {
+    console.log(chalk.cyan.bold('│ ') + chalk.gray('No hay impresoras configuradas'.padEnd(59)) + chalk.cyan.bold('│'));
+  } else {
+    printers.forEach(([key, printer]) => {
+      const state = printer.lastError ? chalk.red('ERROR') : chalk.green('LISTA');
+      const line = `${key.padEnd(25)} ${state}  cola ${String(printer.queue).padStart(3)}  impresos ${printer.totalPrints}`;
+      console.log(chalk.cyan.bold('│ ') + line.slice(0, 59).padEnd(59) + chalk.cyan.bold('│'));
+    });
+  }
+  console.log(chalk.cyan.bold('├─────────────────────────────────────────────────────────────┤'));
+  console.log(chalk.cyan.bold('│ ') + chalk.gray('Health: http://127.0.0.1:' + METRICS_PORT + '/health'.padEnd(45)) + chalk.cyan.bold('│'));
+  console.log(chalk.cyan.bold('│ ') + chalk.gray('Ctrl+C para detener el servicio'.padEnd(59)) + chalk.cyan.bold('│'));
+  console.log(chalk.cyan.bold('└─────────────────────────────────────────────────────────────┘'));
+}
+
+function formatDashboardTime(value) {
+  try {
+    return new Date(value).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch (e) {
+    return '-';
+  }
 }
 
 function rotateLogIfNeeded(logFile) {
@@ -486,9 +532,9 @@ async function resolveImageToLocalPath(imageUrl) {
     let finalUrl = imageUrl;
     if (!/^https?:\/\//i.test(finalUrl)) {
       if (finalUrl.startsWith('/')) {
-        finalUrl = `${BASE_URL}${finalUrl}`;
+        finalUrl = `${getConfiguredBaseUrl()}${finalUrl}`;
       } else {
-        finalUrl = `${BASE_URL}/${finalUrl}`;
+        finalUrl = `${getConfiguredBaseUrl()}/${finalUrl}`;
       }
     }
 
@@ -510,7 +556,11 @@ async function resolveImageToLocalPath(imageUrl) {
 }
 
 async function fetchPendingJobs(tenant) {
-  const resp = await axios.get(`${BASE_URL}/api/public/impresion/${tenant}/pendientes`, {
+  const accessId = getConfiguredDriverAccessId();
+  const url = accessId
+    ? `${getConfiguredBaseUrl()}/api/public/impresion/driver/${encodeURIComponent(accessId)}/pendientes`
+    : `${getConfiguredBaseUrl()}/api/public/impresion/${tenant}/pendientes`;
+  const resp = await axios.get(url, {
     headers: printAuthHeaders(tenant),
     timeout: HTTP_TIMEOUT_MS
   });
@@ -519,11 +569,30 @@ async function fetchPendingJobs(tenant) {
 
 async function markAsCompleted(jobId) {
   const tenantId = (activeConfig && activeConfig.empresaId) ? String(activeConfig.empresaId) : '';
-  const completeUrl = tenantId
-    ? `${BASE_URL}/api/public/impresion/${jobId}/completar?tenantId=${encodeURIComponent(tenantId)}`
-    : `${BASE_URL}/api/public/impresion/${jobId}/completar`;
+  const accessId = getConfiguredDriverAccessId();
+  const completeUrl = accessId
+    ? `${getConfiguredBaseUrl()}/api/public/impresion/driver/${encodeURIComponent(accessId)}/ack/${encodeURIComponent(jobId)}`
+    : tenantId
+    ? `${getConfiguredBaseUrl()}/api/public/impresion/${jobId}/completar?tenantId=${encodeURIComponent(tenantId)}`
+    : `${getConfiguredBaseUrl()}/api/public/impresion/${jobId}/completar`;
 
   await axios.post(completeUrl, {}, {
+    headers: printAuthHeaders(tenantId),
+    timeout: HTTP_TIMEOUT_MS
+  });
+}
+
+async function markAsFailed(jobId, message) {
+  const tenantId = (activeConfig && activeConfig.empresaId) ? String(activeConfig.empresaId) : '';
+  const accessId = getConfiguredDriverAccessId();
+  const errorUrl = accessId
+    ? `${getConfiguredBaseUrl()}/api/public/impresion/driver/${encodeURIComponent(accessId)}/error/${encodeURIComponent(jobId)}`
+    : `${getConfiguredBaseUrl()}/api/public/impresion/${encodeURIComponent(jobId)}/error`;
+  await axios.post(errorUrl, {}, {
+    params: {
+      ...(accessId ? {} : { tenantId }),
+      message: String(message || 'print-failed').slice(0, 1000)
+    },
     headers: printAuthHeaders(tenantId),
     timeout: HTTP_TIMEOUT_MS
   });
@@ -533,6 +602,7 @@ const runtime = createRuntime({
   executePrint,
   fetchPendingJobs,
   markAsCompleted,
+  markAsFailed,
   loadPendingAcks,
   savePendingAcks,
   createWebSocket: (url) => new WebSocket(url),
@@ -553,6 +623,9 @@ const runtime = createRuntime({
       appendQuarantined(entry);
     }
   },
+  getPrintDriverToken: () => getConfiguredPrintDriverToken(),
+  getDriverAccessId: () => getConfiguredDriverAccessId(),
+  getWsEndpoint: () => getConfiguredWsEndpoint(),
   logger: console
 }, {
   wsEndpoint: WS_ENDPOINT,
@@ -568,7 +641,16 @@ const runtime = createRuntime({
 
 async function setupConfig() {
   const data = await inquirer.prompt([
-    { name: 'empresaId', message: 'ID de Empresa (Tenant):', default: '1' }
+    { name: 'empresaId', message: 'Número de empresa (sólo si te lo pidió soporte, opcional):', default: '' },
+    { name: 'baseUrl', message: 'URL del servidor IDA:', default: BASE_URL },
+    { name: 'driverAccessId', message: 'Código de conexión de tu empresa:', type: 'password', mask: '*' },
+    {
+      name: 'printDriverToken',
+      message: 'Token del driver:',
+      type: 'password',
+      mask: '*',
+      default: PRINT_DRIVER_TOKEN
+    }
   ]);
 
   const impresoras = [];
@@ -584,14 +666,160 @@ async function setupConfig() {
     addMore = imp.more;
   }
 
-  const config = { ...data, impresoras };
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  const token = data.printDriverToken || PRINT_DRIVER_TOKEN;
+  if (!token && !data.driverAccessId) {
+    throw new Error('Escribe el código de conexión de tu empresa para continuar.');
+  }
+  const config = { ...data, printDriverToken: token, impresoras };
+  saveDriverConfig(config);
+}
+
+function saveDriverConfig(config) {
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
+}
+
+function maskSecret(value) {
+  if (!value) return 'No configurado';
+  const text = String(value);
+  return text.length > 8 ? `${text.slice(0, 4)}••••${text.slice(-4)}` : 'Configurado';
+}
+
+async function waitForEnter() {
+  await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Presiona Enter para volver al menú' }]);
+}
+
+async function showDriverStatus(config) {
+  console.clear();
+  console.log(chalk.cyan.bold('\n  ESTADO DEL DRIVER\n'));
+  console.log(`  Servicio:       ${status.connected ? chalk.green('Conectado') : chalk.yellow('Esperando conexión')}`);
+  console.log(`  Empresa:        ${status.connected ? chalk.green('Identificada correctamente') : 'Pendiente de identificar'}`);
+  console.log(`  Código:         ${maskSecret(config.driverAccessId)}`);
+  console.log(`  Servidor:       ${config.baseUrl}`);
+  console.log(`  Trabajos en espera de confirmación: ${status.pendingAcks}`);
+  console.log('\n  IMPRESORAS');
+
+  const printers = Array.isArray(config.impresoras) ? config.impresoras : [];
+  if (printers.length === 0) {
+    console.log(chalk.yellow('  No hay impresoras configuradas.'));
+  } else {
+    const checks = await Promise.all(printers.map((printer) =>
+      checkPrinterTcp(printer.ip, printer.puerto || 9100, 1200)
+    ));
+    checks.forEach((check, index) => {
+      const printer = printers[index];
+      const label = printer.tipo || `Impresora ${index + 1}`;
+      const state = check.ok ? chalk.green('Disponible') : chalk.red('No responde');
+      console.log(`  ${label}: ${state} (${printer.ip}:${printer.puerto || 9100})`);
+    });
+  }
+  console.log('');
+  await waitForEnter();
+}
+
+async function editConnection(config) {
+  const data = await inquirer.prompt([
+    { name: 'baseUrl', message: 'Servidor de IDA:', default: config.baseUrl || BASE_URL },
+    {
+      name: 'driverAccessId',
+      message: 'Nuevo código de conexión (deja vacío para conservarlo):',
+      type: 'password',
+      mask: '*'
+    }
+  ]);
+
+  if (data.baseUrl) config.baseUrl = data.baseUrl.replace(/\/+$/, '');
+  if (data.driverAccessId) config.driverAccessId = data.driverAccessId;
+  saveDriverConfig(config);
+  console.log(chalk.green('\n  Conexión actualizada.\n'));
+  await waitForEnter();
+}
+
+async function managePrinters(config) {
+  if (!Array.isArray(config.impresoras)) config.impresoras = [];
+  let leave = false;
+  while (!leave) {
+    console.clear();
+    console.log(chalk.cyan.bold('\n  IMPRESORAS\n'));
+    if (config.impresoras.length === 0) {
+      console.log(chalk.gray('  Todavía no has agregado impresoras.\n'));
+    } else {
+      config.impresoras.forEach((printer, index) => {
+        console.log(`  ${index + 1}. ${printer.tipo || 'Impresora'} - ${printer.ip}:${printer.puerto || 9100}`);
+      });
+      console.log('');
+    }
+
+    const { action } = await inquirer.prompt([{
+      type: 'list',
+      name: 'action',
+      message: '¿Qué deseas hacer?',
+      choices: [
+        { name: 'Agregar una impresora', value: 'add' },
+        { name: 'Eliminar una impresora', value: 'remove', disabled: config.impresoras.length === 0 ? 'No hay impresoras' : false },
+        { name: 'Volver al menú principal', value: 'back' }
+      ]
+    }]);
+
+    if (action === 'back') {
+      leave = true;
+      continue;
+    }
+    if (action === 'add') {
+      const printer = await inquirer.prompt([
+        { name: 'ip', message: 'Dirección de la impresora:', validate: (value) => Boolean(value) || 'Escribe una dirección' },
+        { name: 'puerto', message: 'Puerto de impresión:', default: 9100, type: 'number' },
+        { name: 'tipo', message: '¿Dónde está?', choices: ['COCINA', 'BARRA', 'CAJA', 'OTRA'], type: 'list' }
+      ]);
+      config.impresoras.push({ ip: printer.ip, puerto: printer.puerto, tipo: printer.tipo });
+      saveDriverConfig(config);
+      console.log(chalk.green('\n  Impresora agregada.'));
+      await waitForEnter();
+    }
+    if (action === 'remove') {
+      const { index } = await inquirer.prompt([{
+        type: 'list',
+        name: 'index',
+        message: 'Elige la impresora que deseas eliminar:',
+        choices: config.impresoras.map((printer, i) => ({
+          name: `${printer.tipo || 'Impresora'} - ${printer.ip}:${printer.puerto || 9100}`,
+          value: i
+        }))
+      }]);
+      const printer = config.impresoras[index];
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: `¿Eliminar ${printer.tipo || 'esta impresora'}?`,
+        default: false
+      }]);
+      if (confirmed) {
+        config.impresoras.splice(index, 1);
+        saveDriverConfig(config);
+        console.log(chalk.green('\n  Impresora eliminada.'));
+      }
+      await waitForEnter();
+    }
+  }
+}
+
+async function deleteLocalConfiguration() {
+  const { confirmed } = await inquirer.prompt([{
+    type: 'confirm',
+    name: 'confirmed',
+    message: 'Esto desconectará el driver y borrará su configuración local. ¿Continuar?',
+    default: false
+  }]);
+  if (!confirmed) return false;
+  fs.unlinkSync(CONFIG_FILE);
+  console.log(chalk.green('\n  Configuración local eliminada. Puedes volver a configurarlo cuando quieras.\n'));
+  await waitForEnter();
+  return true;
 }
 
 async function main() {
   console.clear();
   console.log(chalk.blue.bold('============================================='));
-  console.log(chalk.white.bold('   💠 AGENTE DE IMPRESIÓN IDA V1.0.1 STABLE  '));
+  console.log(chalk.white.bold('   IDA PRINT DRIVER 2.0.0 STABLE            '));
   console.log(chalk.white.bold('   Motor: Runtime Modular (Ack Queue)        '));
   console.log(chalk.blue.bold('============================================='));
 
@@ -600,17 +828,58 @@ async function main() {
   }
 
   const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  if (!config.printDriverToken && PRINT_DRIVER_TOKEN) {
+    config.printDriverToken = PRINT_DRIVER_TOKEN;
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  }
+  const hasDriverAccessId = Boolean(config.driverAccessId);
+  if (hasDriverAccessId && !String(config.driverAccessId).match(/^[A-Za-z0-9_-]{64}$/)) {
+    throw new Error('config_ida.json tiene un driverAccessId inválido.');
+  }
+  if (!hasDriverAccessId && (!config.empresaId || !String(config.empresaId).match(/^[1-9][0-9]*$/))) {
+    throw new Error('config_ida.json requiere empresaId para compatibilidad legacy.');
+  }
+  let serverUrl;
+  try {
+    serverUrl = new URL(config.baseUrl || BASE_URL);
+  } catch (e) {
+    throw new Error('config_ida.json tiene una URL de servidor inválida.');
+  }
+  if (!['http:', 'https:'].includes(serverUrl.protocol)) {
+    throw new Error('La URL del servidor debe usar http o https.');
+  }
+  config.baseUrl = serverUrl.toString().replace(/\/+$/, '');
   activeConfig = config;
+  if (!getConfiguredPrintDriverToken() && !getConfiguredDriverAccessId()) {
+    console.log(chalk.yellow('\n  Esta instalación todavía no tiene un código de conexión. Vamos a configurarla en pantalla.\n'));
+    await editConnection(config);
+    return main();
+  }
   const choices = [
-    { name: '▶️  Iniciar Servicio', value: 'run' },
-    { name: '⚙️  Cambiar ID de Empresa o Impresoras', value: 'reset' },
+    { name: '▶️  Iniciar servicio', value: 'run' },
+    { name: '📊  Ver estado de conexión e impresoras', value: 'status' },
+    { name: '🔑  Cambiar código de conexión', value: 'connection' },
+    { name: '🖨️  Administrar impresoras', value: 'printers' },
+    { name: '🧹  Borrar configuración de este equipo', value: 'delete' },
     { name: '❌ Salir', value: 'exit' }
   ];
 
-  const { choice } = await inquirer.prompt([{ type: 'list', name: 'choice', message: 'Acción:', choices }]);
+  const { choice } = await inquirer.prompt([{ type: 'list', name: 'choice', message: '¿Qué deseas hacer?', choices }]);
   if (choice === 'exit') process.exit(0);
-  if (choice === 'reset') {
-    await setupConfig();
+  if (choice === 'status') {
+    await showDriverStatus(config);
+    return main();
+  }
+  if (choice === 'connection') {
+    await editConnection(config);
+    return main();
+  }
+  if (choice === 'printers') {
+    await managePrinters(config);
+    return main();
+  }
+  if (choice === 'delete') {
+    if (await deleteLocalConfiguration()) return main();
     return main();
   }
 

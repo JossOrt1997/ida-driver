@@ -1,15 +1,12 @@
 {
-  "empresaId": "7",
+  "empresaId": "8",
   "impresoras": [
     {
-      "ip": "192.168.0.201",
-      "puerto": 9100,
-      "tipo": "BARRA"
-    },
-    {
-      "ip": "192.168.0.202",
+      "ip": "192.168.1.10",
       "puerto": 9100,
       "tipo": "COCINA"
     }
-  ]
+  ],
+  "baseUrl": "https://ida.analiticasoft.com",
+  "driverAccessId": "IlSA-_EExtfiRPaS3M3TH9B5U1LfQw72SDN3PmaGa_as0A18Xu3cnlD5cGKyoQkO"
 }

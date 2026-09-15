@@ -1,0 +1,9 @@
+config_ida.json
+pending_acks.json
+driver_metrics.json
+driver_metrics_history.json
+driver_job_audit.log
+driver_quarantined_jobs.json
+logs_impresion/
+reports/coverage/
+*.tmp
