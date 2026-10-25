@@ -5,12 +5,13 @@
   "main": "agente.js",
   "scripts": {
     "start": "node agente.js",
-    "check": "node --check agente.js && node --check lib/runtime.js && node --check lib/queue.js && node --check lib/format.js",
+    "check": "node --check agente.js && node --check lib/runtime.js && node --check lib/queue.js && node --check lib/pending-acks.js && node --check lib/format.js",
     "build:win": "pkg . --targets node22-win-x64 --output dist/ida-print-driver.exe",
     "build:linux": "pkg . --targets node22-linux-x64 --output dist/ida-print-driver",
     "release:check": "npm ci && npm run check && npm test -- --runInBand && npm audit --omit=dev",
     "test": "npx jest --runInBand",
-    "test:ci": "npx jest --ci --runInBand --coverage --coverageDirectory=reports/coverage"
+    "test:mutation": "stryker run stryker.config.json",
+    "test:ci": "npx jest --ci --runInBand --coverage --coverageDirectory=reports/coverage --coverageReporters=text --coverageReporters=lcov --coverageReporters=json-summary"
   },
   "keywords": [],
   "author": "",
@@ -35,6 +36,8 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/jest-runner": "10.0.0",
     "@yao-pkg/pkg": "^6.5.0",
     "jest": "^29.7.0"
   }

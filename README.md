@@ -36,7 +36,11 @@ Al abrir el driver encontraras un menu sencillo para:
 
 El panel local de diagnostico esta disponible en `http://127.0.0.1:8787/health` y `http://127.0.0.1:8787/health/deep`.
 
-El driver no marca un trabajo como completado hasta que la impresion termina correctamente. Si el backend no responde, conserva los ACK pendientes y los reintenta al recuperar la conexion.
+El driver no marca un trabajo como completado hasta que la impresion termina correctamente. Si el backend no responde, conserva los ACK pendientes (incluido el tenant) y los reintenta al recuperar la conexion. Tras reiniciar, un ACK persistido evita volver a imprimir ese trabajo y solo reintenta la confirmacion del backend.
+
+### Resultado de impresion desconocido
+
+El ACK confirma al backend que el driver termino su operacion de escritura; no es una confirmacion fisica del mecanismo de la impresora. Si el proceso se cae o pierde la conexion durante la escritura, el driver no puede saber si el papel salio completo. Ese fallo de escritura se reintenta hasta el limite configurado y podria generar una copia duplicada si el primer envio alcanzo a imprimirse. Al llegar al limite, el trabajo queda en cuarentena y se reporta el error; debe revisarse antes de reintentarlo manualmente. Si la escritura si termino y solo fallo el ACK HTTP, el driver no reimprime: conserva y reintenta el ACK.
 
 ## Distribucion
 

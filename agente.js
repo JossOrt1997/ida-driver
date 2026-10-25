@@ -395,7 +395,7 @@ function stopObservabilityServer() {
 }
 
 function drawDashboard() {
-  process.stdout.write('\033[H\033[2J');
+  process.stdout.write('\x1b[H\x1b[2J');
   const connection = status.connected ? chalk.bgGreen.black(' EN LINEA ') : chalk.bgRed.white(' DESCONECTADO ');
   const lastEvent = status.lastConnectedAt || status.lastDisconnectedAt;
   const sync = status.lastSyncAt ? `ultima sincronizacion ${formatDashboardTime(status.lastSyncAt)}` : 'sin sincronizacion';

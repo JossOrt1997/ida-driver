@@ -25,7 +25,15 @@ function createMockWs() {
   };
 }
 
+async function flushMicrotasks() {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+}
+
 describe('runtime', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   test('connects websocket with tenant-scoped print token', async () => {
     const ws = createMockWs();
     let connectedUrl = '';
@@ -213,9 +221,12 @@ describe('runtime', () => {
   });
 
   test('quarantines a print after the configured retry limit and reports the error', async () => {
+    jest.useFakeTimers();
     const failed = [];
+    const printed = [];
     const runtime = createRuntime({
       executePrint: async () => {
+        printed.push('attempt');
         throw new Error('printer offline');
       },
       fetchPendingJobs: async () => [],
@@ -235,10 +246,193 @@ describe('runtime', () => {
 
     runtime.start({ empresaId: '6' });
     runtime.addToQueue('127.0.0.1', 9106, 'Ticket', 601);
-    await new Promise((resolve) => setTimeout(resolve, 1300));
+    await jest.advanceTimersByTimeAsync(1000);
 
     expect(runtime.getStatus().quarantinedJobs).toBe(1);
+    expect(printed).toHaveLength(2);
     expect(failed).toEqual([{ jobId: '601', message: 'printer offline' }]);
+    await runtime.stop();
+    jest.useRealTimers();
+  });
+
+  test('retries a persisted ACK after restart without printing the physically completed job again', async () => {
+    jest.useFakeTimers();
+    const savedAcks = [];
+    const printedBeforeRestart = [];
+    const firstWs = createMockWs();
+    const firstRuntime = createRuntime({
+      executePrint: async () => printedBeforeRestart.push('printed'),
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => { throw new Error('backend unavailable'); },
+      savePendingAcks: async acks => savedAcks.splice(0, savedAcks.length, ...acks),
+      createWebSocket: () => firstWs,
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, { wsEndpoint: 'ws://test.local/ws/impresion', pendingAckPersistDebounceMs: 1, pendingSyncIntervalMs: 999999, pendingAckIntervalMs: 999999 });
+
+    firstRuntime.start({ empresaId: '17' });
+    firstRuntime.addToQueue('127.0.0.1', 9117, 'Ticket confirmado', 1701);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(firstRuntime.getStatus().pendingAcks).toBe(1);
+    await firstRuntime.stop();
+    expect(savedAcks).toEqual([{ jobId: '1701', tenantId: '17', attempts: 0, lastError: null }]);
+
+    const secondWs = createMockWs();
+    const completed = [];
+    const printedAfterRestart = [];
+    const restartedRuntime = createRuntime({
+      executePrint: async () => printedAfterRestart.push('printed again'),
+      fetchPendingJobs: async () => [{ id: 1701, ip: '127.0.0.1', puerto: 9117, texto: 'Ticket confirmado' }],
+      markAsCompleted: async jobId => completed.push(String(jobId)),
+      loadPendingAcks: async () => savedAcks,
+      createWebSocket: () => secondWs,
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, { wsEndpoint: 'ws://test.local/ws/impresion', pendingAckPersistDebounceMs: 1, pendingSyncIntervalMs: 999999, pendingAckIntervalMs: 999999 });
+
+    restartedRuntime.start({ empresaId: '17' });
+    secondWs.emit('open');
+    await flushMicrotasks();
+
+    expect(printedBeforeRestart).toHaveLength(1);
+    expect(printedAfterRestart).toHaveLength(0);
+    expect(completed).toEqual(['1701']);
+    expect(restartedRuntime.getStatus().pendingAcks).toBe(0);
+    await restartedRuntime.stop();
+    jest.useRealTimers();
+  });
+
+  test('discards persisted ACKs belonging to a different tenant', async () => {
+    jest.useFakeTimers();
+    const ws = createMockWs();
+    const completed = [];
+    const audits = [];
+    const runtime = createRuntime({
+      executePrint: async () => {},
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async jobId => completed.push(String(jobId)),
+      loadPendingAcks: async () => [{ jobId: 41, tenantId: 'other-tenant' }],
+      createWebSocket: () => ws,
+      onAudit: event => audits.push(event),
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, { wsEndpoint: 'ws://test.local/ws/impresion', pendingAckIntervalMs: 999999 });
+
+    runtime.start({ empresaId: '18' });
+    ws.emit('open');
+    await flushMicrotasks();
+
+    expect(runtime.getStatus().pendingAcks).toBe(0);
+    expect(completed).toEqual([]);
+    expect(audits.some(event => event.event === 'pending_ack_wrong_tenant_dropped')).toBe(true);
+    await runtime.stop();
+    jest.useRealTimers();
+  });
+
+  test('reconnects after the configured backoff without real-time waiting', async () => {
+    jest.useFakeTimers();
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    const sockets = [];
+    const runtime = createRuntime({
+      executePrint: async () => {},
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => {},
+      createWebSocket: () => {
+        const ws = createMockWs();
+        sockets.push(ws);
+        return ws;
+      },
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, {
+      wsEndpoint: 'ws://test.local/ws/impresion',
+      wsReconnectBaseMs: 500,
+      wsReconnectMaxMs: 2000,
+      pendingSyncIntervalMs: 999999,
+      pendingAckIntervalMs: 999999,
+      wsHeartbeatIntervalMs: 999999
+    });
+
+    runtime.start({ empresaId: '19' });
+    sockets[0].emit('close');
+    await jest.advanceTimersByTimeAsync(499);
+    expect(sockets).toHaveLength(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(sockets).toHaveLength(2);
+    expect(runtime.getMetrics().ws_reconnects).toBe(1);
+
+    await runtime.stop();
+    random.mockRestore();
+  });
+
+  test('processes queues independently for multiple printers', async () => {
+    const ws = createMockWs();
+    const printedByPrinter = [];
+    const runtime = createRuntime({
+      executePrint: async key => printedByPrinter.push(key),
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => {},
+      createWebSocket: () => ws,
+      onStateChange: () => {},
+      logger: { error() {} }
+    }, { wsEndpoint: 'ws://test.local/ws/impresion', pendingSyncIntervalMs: 999999, pendingAckIntervalMs: 999999 });
+
+    runtime.start({ empresaId: '20' });
+    runtime.addToQueue('127.0.0.1', 9120, 'Caja', 2001);
+    runtime.addToQueue('127.0.0.2', 9121, 'Barra', 2002);
+    await flushMicrotasks();
+
+    expect(printedByPrinter.sort()).toEqual(['127.0.0.1:9120', '127.0.0.2:9121']);
+    expect(runtime.getStatus().printers['127.0.0.1:9120'].totalPrints).toBe(1);
+    expect(runtime.getStatus().printers['127.0.0.2:9121'].totalPrints).toBe(1);
+    await runtime.stop();
+  });
+
+  test.each([['timeout', 'ETIMEDOUT'], ['disconnect', 'ECONNRESET']])(
+    'quarantines a printer transport %s at the retry limit', async (_failure, errorCode) => {
+      const ws = createMockWs();
+      const failed = [];
+      const audits = [];
+      const runtime = createRuntime({
+        executePrint: async () => { throw new Error(errorCode); },
+        fetchPendingJobs: async () => [],
+        markAsCompleted: async () => {},
+        markAsFailed: async (jobId, message) => failed.push({ jobId, message }),
+        createWebSocket: () => ws,
+        onAudit: event => audits.push(event),
+        onStateChange: () => {},
+        logger: { error() {} }
+      }, { wsEndpoint: 'ws://test.local/ws/impresion', maxPrintRetries: 1 });
+
+      runtime.start({ empresaId: '21' });
+      runtime.addToQueue('127.0.0.1', 9122, 'Timeout', 2101);
+      await flushMicrotasks();
+
+      expect(runtime.getStatus().quarantinedJobs).toBe(1);
+      expect(failed).toEqual([{ jobId: '2101', message: errorCode }]);
+      expect(audits.some(event => event.event === 'job_quarantined' && event.reason === 'max-print-retries')).toBe(true);
+      await runtime.stop();
+    }
+  );
+
+  test('ignores malformed websocket payload without submitting it to a printer', async () => {
+    const ws = createMockWs();
+    const printed = [];
+    const errors = [];
+    const runtime = createRuntime({
+      executePrint: async (...args) => printed.push(args),
+      fetchPendingJobs: async () => [],
+      markAsCompleted: async () => {},
+      createWebSocket: () => ws,
+      onStateChange: () => {},
+      logger: { error: (...args) => errors.push(args) }
+    }, { wsEndpoint: 'ws://test.local/ws/impresion' });
+
+    runtime.start({ empresaId: '22' });
+    ws.emit('message', '{not-json');
+
+    expect(printed).toHaveLength(0);
+    expect(errors.some(([message]) => message === '⚠️ Mensaje WS inválido:')).toBe(true);
     await runtime.stop();
   });
 
